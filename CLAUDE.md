@@ -52,8 +52,7 @@ Progress indices:
   changing either shifts every subscriber's position in the plan.
 - `nt_progress = 2*weeks` then `+0/+1` for Tue/Thu.
 - Wisdom: `(weeks*5 + weekday) % wisdom_entries`.
-- All three index their list modulo its line count; a stray `IndexError` is caught and
-  wraps to entry 0.
+- All three index their list modulo its line count, so an index can never run past the end.
 
 Output: BibleGateway NIV deep-links for the main + wisdom passage, plus an **estimated
 read time** — `words_by_reference()` sums `WordCountKjv` from `chapters.csv` for the
