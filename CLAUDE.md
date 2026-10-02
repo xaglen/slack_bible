@@ -19,9 +19,10 @@ Publicly documented in `README.md` (the reading-plan rationale). `LICENSE` is MI
   the README's example line):
   - `slack.py` — the main plan, ~04:00
   - `mcheyne.py` — M'Cheyne readings, ~06:00, posts to a **hardcoded** `#xa-mcheyne`
-  - Both are piped through `systemd-cat -t xadb-cron`; read logs with
-    `journalctl -t xadb-cron` (shared tag with every other XADB cron script — grep for
-    the script name or its `print()` output).
+  - Logs: `/var/log/xadb/cron-bible-slack.log` / `cron-bible-mcheyne.log` (via XADB's
+    `scripts/cron_logging.py`); ERROR lines and crashes also go to XADB's Sentry, tagged
+    `cron_script`. Cron still pipes stdout to `systemd-cat -t xadb-cron`, but journald
+    here keeps only ~13h. Outside the XADB tree the import falls back to `basicConfig`.
 - **Run with the XADB venv python, not system python3**: `slack_sdk` (and `feedparser`
   for `mcheyne.py`) are only installed in `/www/vhosts/xastanford.org/wsgi/xadb/venv`.
   The README's `/usr/bin/python3` line is stale for this host.
@@ -72,11 +73,11 @@ number ("Philemon", "Jude") hits the `ValueError` branch → chapter 1.
 | `chapters_original.csv` | backup of `chapters.csv` (untracked) | reference only |
 | `bible.json` | 8 MB full-text dump | only consumed by the unfinished `chapters.json.py` scratch |
 
-- `wisdom.csv` line 1 carries a **UTF-8 BOM**. `slack.py` reads `wisdom.csv` with a plain
-  `csv.reader` (no `utf-8-sig`), so the first entry string is `"﻿Psalm 1"` — fine for
-  the URL but be aware when comparing.
+- `wisdom.csv` line 1 carries a **UTF-8 BOM**; every CSV is opened with `utf-8-sig`, which strips it.
+- `books.csv` spells it **"Psalm"**, not "Psalms" — a book name that doesn't match is logged as an
+  ERROR (Sentry) and counted as 0 words; the post still goes out.
 - README's stated counts (126 OT / 55 NT / 248 wisdom readings) have drifted:
-  `ot.csv` is now 127 lines (`Nehemiah 11-13` added), `wisdom.csv` is 247.
+  `ot.csv` is now 127 entries (`Nehemiah 11-13` added), `wisdom.csv` 248.
 
 ## Other files — mostly not part of the daily job
 
@@ -88,20 +89,11 @@ number ("Philemon", "Jude") hits the `ValueError` branch → chapter 1.
   yesterday/today/tomorrow table and hardcodes the wisdom-book chapter ranges in PHP
   rather than reading `wisdom.csv`. If you change the plan logic, this is a parallel copy
   that will silently diverge.
-- `pray.log.txt`, `votd.log.txt` — stray logs from sibling `scripts/` tools; not this
-  repo's. `*.log` is gitignored but `.log.txt` is not, so they show as untracked.
+- `pray.log.txt`, `votd.log.txt` — stray logs from sibling `scripts/` tools; gitignored (`*.log.txt`).
 
 ## `mcheyne.py`
 
-Separate job. Parses the edginet M'Cheyne RSS feed (`feedparser`), posts to `#xa-mcheyne`.
+Separate job. Fetches the edginet M'Cheyne RSS feed (`requests`, 20s timeout) and parses it with
+`feedparser`; posts to `#xa-mcheyne`, or logs an ERROR and posts nothing if no readings match.
 Odd calendar year → Carson "year one" + the feed's "Family" readings; even year → "year
 two" + "Secret" readings.
-
-## Working-tree state
-
-The uncommitted diff on `slack.py` / `chapters.py` / `mcheyne.py` / `settings.example.py`
-is almost entirely **ruff reformatting** (import sorting, quote style, line wrapping)
-applied by the parent XADB repo's pre-commit hook when these files were staged there.
-`slack.py` also has one real change: `print("Chapters in …")` now indexes
-`book_chapters[...]` instead of printing the raw id. Review before committing into this
-nested repo — its history is otherwise hand-written, unformatted style.

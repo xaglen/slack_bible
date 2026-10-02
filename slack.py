@@ -13,15 +13,19 @@ import settings
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-logger = logging.getLogger(__name__)
-# journald_handler = JournaldLogHandler()
-# journald_handler.setFormatter(logging.Formatter('[%(levelname)s] %message)s'))
-# logger.addHandler(journald_handler)
-logger.setLevel(logging.INFO)
+try:
+    # XADB deployment: persistent log in /var/log/xadb + Sentry alerts on errors
+    sys.path.insert(0, "/www/vhosts/xastanford.org/wsgi/xadb/scripts")
+    import cron_logging
+
+    logger = cron_logging.setup("bible-slack", logging.DEBUG if settings.DEBUG else logging.INFO)
+except ImportError:
+    logging.basicConfig(level=logging.DEBUG if settings.DEBUG else logging.INFO)
+    logger = logging.getLogger("bible-slack")
 
 
 def words_by_reference(passage):
-    print(f"Parameter pasage: {passage}")
+    logger.debug("Counting words for %r", passage)
     wordcount = 0
     passage_book = passage.rsplit(" ", 1)[0]
     passage_chapters = passage.split()[-1]
@@ -55,9 +59,9 @@ def words_by_reference(passage):
 
     if passage_book not in books:
         # a typo'd book in a CSV shouldn't stop the post -- just under-count the read time
-        print("Unknown book " + repr(passage_book) + " - not in books.csv, counting 0 words.")
+        logger.error("Unknown book %r in %r - not in books.csv, counting 0 words", passage_book, passage)
         return 0
-    print("Chapters in " + passage_book + ": " + str(book_chapters[books[passage_book]]) + ".")
+    logger.debug("Chapters in %s: %s", passage_book, book_chapters[books[passage_book]])
 
     with open(
         "/www/vhosts/xastanford.org/wsgi/xadb/scripts/bible/chapters.csv", newline="", encoding="utf-8-sig"
@@ -90,8 +94,6 @@ def reading_time(word_count=0):
 # for passage in passages:
 #    print(words_by_reference(passage))
 
-if settings.DEBUG:
-    print("Starting script")
 
 client = WebClient(token=settings.SLACK_TOKEN)
 
@@ -99,8 +101,6 @@ start = date(2012, 10, 22)
 today = date.today()
 weeks = (today - start).days // 7
 
-if settings.DEBUG:
-    print(f"Weeks {weeks}")
 
 with open("/www/vhosts/xastanford.org/wsgi/xadb/scripts/bible/nt.csv", newline="", encoding="utf-8-sig") as csvfile:
     new_testament = list(csv.reader(csvfile, quoting=csv.QUOTE_NONE))
@@ -114,8 +114,7 @@ with open("/www/vhosts/xastanford.org/wsgi/xadb/scripts/bible/ot.csv", newline="
 
 day_of_week = date.today().weekday()
 
-if settings.DEBUG:
-    print(f"Day of week: {day_of_week}")
+logger.debug("Weeks since start: %d, day of week: %d", weeks, day_of_week)
 
 ot_progress = (
     3 * weeks + 15
@@ -144,8 +143,7 @@ try:
         ot_index = ot_progress % old_testament_entries
         passage = old_testament[ot_index]
     else:
-        if settings.DEBUG:
-            print("Exiting scipt")
+        logger.info("Weekend (day %d) - nothing to post", day_of_week)
         sys.exit()  # it's the weekend or there is a logic error
 except IndexError:  # weird - just wrap around
     if day_of_week in [0, 2, 4]:
@@ -153,8 +151,6 @@ except IndexError:  # weird - just wrap around
     else:
         passage = new_testament[0]
 
-if settings.DEBUG:
-    print(f"Passage: {passage}")
 
 passage_string = f"Main reading: <http://www.biblegateway.com/passage/?search={urllib.parse.quote(passage[0])}&version=NIV|{passage[0]}>"
 # print(passage_string)
@@ -170,9 +166,7 @@ with open(
 # wisdom_chapters=sum(wisdom_books.values())
 
 wisdom_progress = (weeks * 5 + day_of_week) % wisdom_entries
-print("Wisdom progress {}".format(wisdom_progress))
 wisdom_passage = wisdom[wisdom_progress][0]
-print("Wisdom passage {}".format(wisdom_passage))
 wisdom_passage_string = "Wisdom reading: <http://www.biblegateway.com/passage/?search={}&version=NIV|{}>".format(
     urllib.parse.quote(wisdom_passage), wisdom_passage
 )
@@ -199,26 +193,28 @@ time_string = reading_time(total_wordcount)
 
 slack_message = f"Today's Bible readings. {time_string}\n\nSee the schedule: <https://github.com/xaglen/slack_bible|GitHub>:\n* {passage_string}\n* {wisdom_passage_string}"
 
+logger.info(
+    "Main: %s (week %d, day %d) | Wisdom: %s (#%d of %d) | ~%d words",
+    passage[0],
+    weeks,
+    day_of_week,
+    wisdom_passage,
+    wisdom_progress,
+    wisdom_entries,
+    total_wordcount,
+)
+
 try:
     resp = client.chat_postMessage(
         channel=settings.SLACK_CHANNEL,
         text=slack_message,
         unfurl_links=False,
     )
+    logger.info("Posted to %s (ts %s)", settings.SLACK_CHANNEL, resp.get("ts"))
 except SlackApiError as e:
     # You will get a SlackApiError if "ok" is False
-    message = "Slack error posting Bible reading"
-    logger.info(message)
-    logger.info(e)
-    logger.info(e.response)
-    print(message)
-    print(e)
-except TypeError as e:
-    message = "TypeError posting Bible reading: {}".format(repr(e))
-    logger.info(message)
-    print(message + ": " + repr(e))
-except:
-    e = repr(sys.exc_info()[0])
-    message = "Error posting Bible reading: {}".format(e)
-    logger.info(message)
-    print(message + ": " + e)
+    logger.error("Slack error posting Bible reading: %s", e.response.get("error"), exc_info=True)
+    sys.exit(1)
+except Exception:
+    logger.exception("Error posting Bible reading")
+    sys.exit(1)
