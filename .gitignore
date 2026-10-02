@@ -130,3 +130,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# stray logs from sibling scripts/ tools
+*.log.txt
