@@ -5,6 +5,7 @@ Posts a daily Bible reading to Slack
 # from systemd.journal import JournaldLogHandler
 import csv
 import logging
+import re
 import sys
 import urllib.parse
 from datetime import date
@@ -43,16 +44,17 @@ except requests.RequestException as e:
 feed = feedparser.parse(response.content)
 logger.debug("Feed: %s", pformat(feed))
 
-if today.year % 2 == 1:
-    readings = "Today's <http://www.edginet.org/mcheyne/info.html|M'Cheyne> readings (Carson year one):\n"
-else:
-    readings = "Today's <http://www.edginet.org/mcheyne/info.html|M'Cheyne> readings (Carson year two):\n"
+year = "one" if today.year % 2 == 1 else "two"
+readings = f"📖 *Today's <http://www.edginet.org/mcheyne/info.html|M'Cheyne> readings* · Carson year {year}\n"
+titles = []
 
 reading_count = 0
 for entry in feed.entries:
     if (today.year % 2 == 0 and "Secret" in entry.title) or (today.year % 2 == 1 and "Family" in entry.title):
-        title = entry.title.rsplit(" ", 1)[0]
-        readings += "* <{link}|{title}>\n".format(title=title, link=entry.links[0].href)
+        # 'Psalm 85' for a single psalm, en dash in ranges — display only, the link is unchanged.
+        title = re.sub(r"^Psalms (\d+)$", r"Psalm \1", entry.title.rsplit(" ", 1)[0]).replace("-", "–")
+        titles.append(title)
+        readings += "• <{link}|{title}>\n".format(title=title, link=entry.links[0].href)
         reading_count += 1
 
 if reading_count == 0:
@@ -63,7 +65,11 @@ if reading_count == 0:
 logger.info("Feed had %d entries; posting %d readings", len(feed.entries), reading_count)
 
 try:
-    resp = client.chat_postMessage(channel="xa-mcheyne", text=readings)
+    resp = client.chat_postMessage(
+        channel="xa-mcheyne",
+        text=f"📖 Today's M'Cheyne readings: {', '.join(titles)}",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": readings.strip()}}],
+    )
     logger.info("Posted to #xa-mcheyne (ts %s)", resp.get("ts"))
 except SlackApiError as e:
     # You will get a SlackApiError if "ok" is False

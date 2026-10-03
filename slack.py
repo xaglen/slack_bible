@@ -5,6 +5,7 @@ Posts a daily Bible reading to Slack
 # from systemd.journal import JournaldLogHandler
 import csv
 import logging
+import re
 import sys
 import urllib.parse
 from datetime import date
@@ -78,7 +79,14 @@ def reading_time(word_count=0):
     minutes, _seconds = divmod(60 * word_count / words_per_minute, 60)
     # multiply by 60 since I then divmod by 60. Since I don't really care about seconds anymore
     # I could just do minutes = word_count / words_per_minute and get the same result
-    return f"*Estimated read time: {round(minutes)} minutes (~{word_count} words)*"
+    return f"about {max(1, round(minutes))} min (~{word_count:,} words)"
+
+
+def pretty_reference(reference):
+    """Display form of a reference: 'Ruth 1–4' (en dash in ranges), 'Psalm 85' for a single
+    psalm. Display only — links keep the original text, which Bible Gateway parses."""
+    reference = re.sub(r"(?<=\d)-(?=\d)", "–", reference.strip())
+    return re.sub(r"^Psalms (\d+)$", r"Psalm \1", reference)
 
 
 # reference = "Luke 1 -4; Proverbs 22"
@@ -138,7 +146,7 @@ else:
     sys.exit()  # it's the weekend or there is a logic error
 
 
-passage_string = f"Main reading: <http://www.biblegateway.com/passage/?search={urllib.parse.quote(passage[0])}&version=NIV|{passage[0]}>"
+passage_string = f"Main: <http://www.biblegateway.com/passage/?search={urllib.parse.quote(passage[0])}&version=NIV|{pretty_reference(passage[0])}>"
 # print(passage_string)
 
 with open(
@@ -152,8 +160,8 @@ with open(
 
 wisdom_progress = (weeks * 5 + day_of_week) % wisdom_entries
 wisdom_passage = wisdom[wisdom_progress][0]
-wisdom_passage_string = "Wisdom reading: <http://www.biblegateway.com/passage/?search={}&version=NIV|{}>".format(
-    urllib.parse.quote(wisdom_passage), wisdom_passage
+wisdom_passage_string = "Wisdom: <http://www.biblegateway.com/passage/?search={}&version=NIV|{}>".format(
+    urllib.parse.quote(wisdom_passage), pretty_reference(wisdom_passage)
 )
 
 # print (passage_string)
@@ -169,7 +177,19 @@ total_wordcount += words_by_reference(wisdom_passage.strip())
 
 time_string = reading_time(total_wordcount)
 
-slack_message = f"Today's Bible readings. {time_string}\n\nSee the schedule: <https://github.com/xaglen/slack_bible|GitHub>:\n* {passage_string}\n* {wisdom_passage_string}"
+slack_message = f"📖 *Today's Bible readings* · {time_string}\n• {passage_string}\n• {wisdom_passage_string}"
+blocks = [
+    {"type": "section", "text": {"type": "mrkdwn", "text": slack_message}},
+    {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": "<https://github.com/xaglen/slack_bible|Reading plan on GitHub>"}],
+    },
+]
+# What a phone notification shows: the passages themselves.
+notification = (
+    f"📖 Today's Bible readings: {pretty_reference(passage[0])}, {pretty_reference(wisdom_passage)} · "
+    f"{time_string.split(' (', 1)[0]}"
+)
 
 logger.info(
     "Main: %s (week %d, day %d) | Wisdom: %s (#%d of %d) | ~%d words",
@@ -185,7 +205,8 @@ logger.info(
 try:
     resp = client.chat_postMessage(
         channel=settings.SLACK_CHANNEL,
-        text=slack_message,
+        text=notification,
+        blocks=blocks,
         unfurl_links=False,
     )
     logger.info("Posted to %s (ts %s)", settings.SLACK_CHANNEL, resp.get("ts"))
